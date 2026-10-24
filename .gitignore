@@ -12,6 +12,7 @@
 /captures
 .externalNativeBuild
 .cxx
+.idea/
 local.properties
 # Gradle build output
 **/build/
