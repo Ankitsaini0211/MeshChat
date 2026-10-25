@@ -27,6 +27,10 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import android.bluetooth.BluetoothGattCharacteristic
+import android.widget.Button
+import android.widget.Toast
+import androidx.compose.material3.OutlinedTextField
 
 @Composable
 fun BluetoothGattClientSection() {
@@ -43,6 +47,10 @@ fun BluetoothGattClientSection() {
 
     var clientStatus by remember {
         mutableStateOf("Ready to find a MeshChat server")
+    }
+
+    var messageText by remember{
+        mutableStateOf("")
     }
 
     var connectedDevice by remember {
@@ -140,8 +148,108 @@ fun BluetoothGattClientSection() {
                         "Service discovery failed: $status"
                 }
             }
+
+            override fun onCharacteristicWrite(
+                gatt: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic,
+                status: Int
+            ) {
+                if (characteristic.uuid == MESHCHAT_RX_UUID) {
+                    clientStatus = if (status == BluetoothGatt.GATT_SUCCESS) {
+                        "Message write successful!"
+                    } else {
+                        "Message write failed: $status"
+                    }
+
+                    android.util.Log.d(
+                        "MeshChatBLE",
+                        "Write callback: status=$status"
+                    )
+                }
+            }
+
+
+
+
+
+
+
         }
     }
+
+
+    fun sendMessage() {
+
+        val gatt = bluetoothGatt
+
+        if(gatt == null) {
+            clientStatus = "Connect to a MeshChat server first"
+            return
+        }
+
+        val service = gatt.getService(MESHCHAT_SERVICE_UUID)
+
+        if(service == null) {
+            clientStatus = "MeshChat service not found"
+            return
+        }
+
+        val rxCharacteristic =
+            service.getCharacteristic(MESHCHAT_RX_UUID)
+
+        if(rxCharacteristic == null) {
+            clientStatus = "RX characteristic not found"
+            return
+        }
+
+        val message = messageText.trim()
+
+        if(message.isEmpty()) {
+            clientStatus = "Type a message first"
+            return
+        }
+
+
+
+        try {
+            val messageBytes = message.toByteArray(Charsets.UTF_8)
+
+            val success = if (android.os.Build.VERSION.SDK_INT >= 33) {
+                gatt.writeCharacteristic(
+                    rxCharacteristic,
+                    messageBytes,
+                    BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                ) == android.bluetooth.BluetoothStatusCodes.SUCCESS
+            } else {
+                @Suppress("DEPRECATION")
+                rxCharacteristic.writeType =
+                    BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+
+                @Suppress("DEPRECATION")
+                rxCharacteristic.value = messageBytes
+
+                @Suppress("DEPRECATION")
+                gatt.writeCharacteristic(rxCharacteristic)
+
+            }
+
+            clientStatus = if(success) {
+                "Sending message..."
+            } else {
+                "Unable to start message write"
+            }
+        } catch (e: SecurityException) {
+            clientStatus = "Bluetooth permission missing"
+        }
+
+
+
+    }
+
+
+
+
+
 
     Column(
         modifier = Modifier
@@ -152,6 +260,25 @@ fun BluetoothGattClientSection() {
 
         Text("MeshChat GATT Client")
         Text(clientStatus)
+
+        OutlinedTextField(
+            value = messageText,
+            onValueChange = { messageText = it },
+            label = { Text("Message") },
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Button(
+            onClick = {sendMessage()},
+            enabled = bluetoothGatt != null
+        )
+
+        {
+            Text("Send")
+        }
+
+
+
 
         Button(
             onClick = {

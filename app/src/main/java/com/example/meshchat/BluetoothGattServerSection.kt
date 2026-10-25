@@ -49,6 +49,10 @@ fun BluetoothGattServerSection() {
         mutableStateOf("No phone connected")
     }
 
+    var receivedMessage by remember {
+        mutableStateOf("No messages received yet")
+    }
+
 
     var gattServer by remember {
         mutableStateOf<BluetoothGattServer?>(null)
@@ -58,7 +62,7 @@ fun BluetoothGattServerSection() {
         BluetoothGattCharacteristic(
             MESHCHAT_RX_UUID,
             BluetoothGattCharacteristic.PROPERTY_WRITE,
-            BluetoothGattCharacteristic.PERMISSION_READ
+            BluetoothGattCharacteristic.PERMISSION_WRITE
         )
     }
 
@@ -108,6 +112,93 @@ fun BluetoothGattServerSection() {
             }
 
 
+            override fun onCharacteristicWriteRequest(
+                device: BluetoothDevice,
+                requestId: Int,
+                characteristic: BluetoothGattCharacteristic,
+                preparedWrite: Boolean,
+                responseNeeded: Boolean,
+                offset: Int,
+                value: ByteArray
+            ) {
+                if (characteristic.uuid == MESHCHAT_RX_UUID) {
+
+                    val message = value.toString(Charsets.UTF_8)
+
+                    receivedMessage = message
+
+                    Log.d(
+                        "MeshChatBLE",
+                        "Message received: $message"
+                    )
+
+                    if (responseNeeded) {
+                        val hasConnectPermission =
+                            Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+                                    ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.BLUETOOTH_CONNECT
+                                    ) == PackageManager.PERMISSION_GRANTED
+
+                        if (hasConnectPermission) {
+                            try {
+                                gattServer?.sendResponse(
+                                    device,
+                                    requestId,
+                                    BluetoothGatt.GATT_SUCCESS,
+                                    offset,
+                                    null
+                                )
+                            } catch (e: SecurityException) {
+                                Log.e(
+                                    "MeshChatBLE",
+                                    "Permission missing while sending response",
+                                    e
+                                )
+                            }
+                        } else {
+                            Log.e(
+                                "MeshChatBLE",
+                                "BLUETOOTH_CONNECT permission not granted"
+                            )
+                        }
+                    }
+                } else {
+                    if (responseNeeded) {
+                        val hasConnectPermission =
+                            Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+                                    ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.BLUETOOTH_CONNECT
+                                    ) == PackageManager.PERMISSION_GRANTED
+
+                        if (hasConnectPermission) {
+                            try {
+                                gattServer?.sendResponse(
+                                    device,
+                                    requestId,
+                                    BluetoothGatt.GATT_SUCCESS,
+                                    offset,
+                                    null
+                                )
+                            } catch (e: SecurityException) {
+                                Log.e(
+                                    "MeshChatBLE",
+                                    "Permission missing while sending response",
+                                    e
+                                )
+                            }
+                        } else {
+                            Log.e(
+                                "MeshChatBLE",
+                                "BLUETOOTH_CONNECT permission not granted"
+                            )
+                        }
+                    }
+                }
+            }
+
+
 
             override fun onServiceAdded(
                 status: Int,
@@ -143,6 +234,8 @@ fun BluetoothGattServerSection() {
         Text("MeshChat GATT Server")
         Text(serverStatus)
         Text(connectedDeviceName)
+        Text("Received message: $receivedMessage")
+
 
         Button(
 
