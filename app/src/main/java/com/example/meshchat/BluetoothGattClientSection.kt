@@ -28,9 +28,21 @@ import androidx.core.content.ContextCompat
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import android.bluetooth.BluetoothGattCharacteristic
-import android.widget.Button
-import android.widget.Toast
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Alignment
+import android.bluetooth.BluetoothGattDescriptor
+import android.bluetooth.BluetoothStatusCodes
+import android.net.wifi.aware.Characteristics
+import java.util.UUID
+
 
 @Composable
 fun BluetoothGattClientSection() {
@@ -45,12 +57,24 @@ fun BluetoothGattClientSection() {
 
     val bluetoothAdapter = bluetoothManager.adapter
 
+    val cccUuid = UUID.fromString(
+        "00002902-0000-1000-8000-00805f9b34fb"
+    )
+
     var clientStatus by remember {
         mutableStateOf("Ready to find a MeshChat server")
     }
 
     var messageText by remember{
         mutableStateOf("")
+    }
+
+    var messages by remember {
+        mutableStateOf<List<ChatMessage>>(emptyList())
+    }
+
+    var pendingMessage by remember {
+        mutableStateOf<String?>(null)
     }
 
     var connectedDevice by remember {
@@ -95,6 +119,22 @@ fun BluetoothGattClientSection() {
         }
     }
 
+    fun handleIncomingMessage(value: ByteArray) {
+        val receivedText = value.toString(Charsets.UTF_8)
+
+        messages = messages + ChatMessage(
+            text = receivedText,
+            isSent = false
+        )
+
+        clientStatus = "Message received!"
+
+        android.util.Log.d(
+            "MeshChatBLE",
+            "Received notification: $receivedText"
+        )
+    }
+
     val gattCallback = remember {
         object : BluetoothGattCallback() {
 
@@ -134,18 +174,135 @@ fun BluetoothGattClientSection() {
                 gatt: BluetoothGatt,
                 status: Int
             ) {
-                if (status == BluetoothGatt.GATT_SUCCESS) {
-                    val service =
-                        gatt.getService(MESHCHAT_SERVICE_UUID)
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    clientStatus = "Service discovery failed: $status"
+                    return
+                }
 
-                    clientStatus = if (service != null) {
-                        "Connected! MeshChat service found."
-                    } else {
-                        "Connected, but MeshChat service not found."
+                if (
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.BLUETOOTH_CONNECT
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    clientStatus = "Bluetooth Connect permission is missing"
+                    return
+                }
+
+                try {
+                    val service = gatt.getService(MESHCHAT_SERVICE_UUID)
+
+                    if (service == null) {
+                        clientStatus = "MeshChat service not found"
+                        return
                     }
-                } else {
-                    clientStatus =
-                        "Service discovery failed: $status"
+
+                    val txCharacteristic =
+                        service.getCharacteristic(MESHCHAT_TX_UUID)
+
+                    if (txCharacteristic == null) {
+                        clientStatus = "TX characteristic not found"
+                        return
+                    }
+
+                    val notificationEnabled = gatt.setCharacteristicNotification(
+                        txCharacteristic,
+                        true
+                    )
+
+                    if (!notificationEnabled) {
+                        clientStatus = "Failed to enable local notifications"
+                        return
+                    }
+
+                    val cccd = txCharacteristic.getDescriptor(cccUuid)
+
+                    if (cccd == null) {
+                        clientStatus = "CCCD descriptor not found"
+                        return
+                    }
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        val result = gatt.writeDescriptor(
+                            cccd,
+                            BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        )
+
+                        clientStatus = if (result == BluetoothStatusCodes.SUCCESS) {
+                            "Subscribing to notifications..."
+                        } else {
+                            "CCCD write failed: $result"
+                        }
+                    } else {
+                        @Suppress("DEPRECATION")
+                        cccd.value =
+                            BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+
+                        @Suppress("DEPRECATION")
+                        val started = gatt.writeDescriptor(cccd)
+
+                        clientStatus = if (started) {
+                            "Subscribing to notifications..."
+                        } else {
+                            "Failed to start CCCD write"
+                        }
+                    }
+                } catch (e: SecurityException) {
+                    clientStatus = "Bluetooth permission missing"
+                    android.util.Log.e(
+                        "MeshChatBLE",
+                        "Permission denied during notification setup",
+                        e
+                    )
+                }
+            }
+
+
+            @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+            override fun onDescriptorWrite(
+                gatt: BluetoothGatt,
+                descriptor: BluetoothGattDescriptor,
+                status: Int
+            ) {
+                if (descriptor.uuid == cccUuid) {
+                    if (status == BluetoothGatt.GATT_SUCCESS) {
+                        clientStatus = "Connected! Notifications enabled"
+
+                        android.util.Log.d(
+                            "MeshChatBLE",
+                            "CCCD subscription successful"
+                        )
+                    } else {
+                        clientStatus = "Notification subscription failed: $status"
+
+                        android.util.Log.e(
+                            "MeshChatBLE",
+                            "CCCD write failed: $status"
+                        )
+                    }
+                }
+            }
+
+
+            @Suppress("DEPRECATION")
+            override fun onCharacteristicChanged(
+                gatt: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic
+            ) {
+                if (characteristic.uuid == MESHCHAT_TX_UUID) {
+                    val value = characteristic.value ?: return
+                    handleIncomingMessage(value)
+                }
+            }
+
+            override fun onCharacteristicChanged(
+                gatt: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic,
+                value: ByteArray
+            ) {
+                if (characteristic.uuid == MESHCHAT_TX_UUID) {
+                    handleIncomingMessage(value)
                 }
             }
 
@@ -155,10 +312,22 @@ fun BluetoothGattClientSection() {
                 status: Int
             ) {
                 if (characteristic.uuid == MESHCHAT_RX_UUID) {
-                    clientStatus = if (status == BluetoothGatt.GATT_SUCCESS) {
-                        "Message write successful!"
+                    if (status == BluetoothGatt.GATT_SUCCESS) {
+                        val sentMessage = pendingMessage
+
+                        if(sentMessage != null) {
+                            messages = messages + ChatMessage(
+                                text = sentMessage,
+                                isSent = true
+                            )
+                        }
+
+                        pendingMessage = null
+
+                        clientStatus = "Message write successful!"
                     } else {
-                        "Message write failed: $status"
+                        pendingMessage = null
+                        clientStatus = "Message write failed: $status"
                     }
 
                     android.util.Log.d(
@@ -234,8 +403,10 @@ fun BluetoothGattClientSection() {
             }
 
             clientStatus = if(success) {
+                pendingMessage = message
                 "Sending message..."
             } else {
+                pendingMessage = null
                 "Unable to start message write"
             }
         } catch (e: SecurityException) {
@@ -254,12 +425,51 @@ fun BluetoothGattClientSection() {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
 
         Text("MeshChat GATT Client")
         Text(clientStatus)
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = "Chat",
+            style = MaterialTheme.typography.titleLarge
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        if(messages.isEmpty()) {
+            Text("No messages yet. Send a message to get started.")
+        }
+
+
+        messages.forEach { message ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = if(message.isSent) {
+                    Arrangement.End
+                } else{
+                    Arrangement.Start
+                }
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if(message.isSent) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    }
+                ) {
+                    Text(
+                        text = message.text,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
 
         OutlinedTextField(
             value = messageText,

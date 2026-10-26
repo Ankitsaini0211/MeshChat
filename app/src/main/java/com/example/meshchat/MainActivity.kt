@@ -44,6 +44,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import kotlin.contracts.contract
@@ -97,6 +99,7 @@ class MainActivity : ComponentActivity() {
                             .fillMaxSize()
                             .padding(innerPadding)
                             .padding(16.dp)
+                            .verticalScroll(rememberScrollState())
                     ) {
                         BluetoothPermissionSection()
                         BluetoothStatusSection()
@@ -413,8 +416,8 @@ fun BluetoothScannerSection() {
         Spacer(modifier = Modifier.height(8.dp))
 
 
-        LazyColumn{
-            items(nearbyDevices) {device ->
+        Column {
+            nearbyDevices.forEach { device ->
                 Text(
                     text = device,
                     modifier = Modifier.padding(vertical = 6.dp)
