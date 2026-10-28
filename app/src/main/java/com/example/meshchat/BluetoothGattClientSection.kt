@@ -41,7 +41,17 @@ import androidx.compose.ui.Alignment
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothStatusCodes
 import android.net.wifi.aware.Characteristics
+import androidx.compose.ui.input.pointer.stylusHoverIcon
+import java.nio.file.WatchEvent
 import java.util.UUID
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.layout.heightIn
 
 
 @Composable
@@ -71,6 +81,14 @@ fun BluetoothGattClientSection() {
 
     var messages by remember {
         mutableStateOf<List<ChatMessage>>(emptyList())
+    }
+
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(messages.size) {
+        if(messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.lastIndex)
+        }
     }
 
     var pendingMessage by remember {
@@ -416,58 +434,115 @@ fun BluetoothGattClientSection() {
 
 
     }
-
-
-
-
-
-
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(16.dp)
     ) {
 
-        Text("MeshChat GATT Client")
-        Text(clientStatus)
-        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = "MeshChat",
+            style = MaterialTheme.typography.headlineMedium
+        )
+
+
+        Spacer(modifier = Modifier.height(4.dp))
 
         Text(
-            text = "Chat",
-            style = MaterialTheme.typography.titleLarge
+
+            text = when {
+
+                clientStatus.contains("Notifications enabled") ->
+                    "● Connected"
+
+                clientStatus.contains("Connected!") ->
+                    "● Connecting..."
+
+                clientStatus.contains("Disconnected") ->
+                    "○ Disconnected"
+                else ->
+                    "○ Not connected"
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Text(
+            text = "Messages",
+            style = MaterialTheme.typography.titleMedium
+        )
+
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        if(messages.isEmpty()) {
-            Text("No messages yet. Send a message to get started.")
-        }
-
-
-        messages.forEach { message ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = if(message.isSent) {
-                    Arrangement.End
-                } else{
-                    Arrangement.Start
-                }
+        if (messages.isEmpty()) {
+            Text(
+                text = "No messages yet. Say hello!",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 16.dp)
+            )
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 400.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = if(message.isSent) {
-                        MaterialTheme.colorScheme.primaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant
+                itemsIndexed(messages) { _, message ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = if (message.isSent) {
+                            Arrangement.End
+                        } else {
+                            Arrangement.Start
+                        }
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(
+                                topStart = 16.dp,
+                                topEnd = 16.dp,
+                                bottomStart = if (message.isSent) 16.dp else 4.dp,
+                                bottomEnd = if (message.isSent) 4.dp else 16.dp
+                            ),
+                            color = if (message.isSent) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant
+                            },
+                            modifier = Modifier.fillMaxWidth(0.82f)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(
+                                    horizontal = 12.dp,
+                                    vertical = 8.dp
+                                )
+                            ) {
+                                Text(
+                                    text = message.text,
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                Text(
+                                    text = java.text.SimpleDateFormat(
+                                        "hh:mm a",
+                                        java.util.Locale.getDefault()
+                                    ).format(java.util.Date(message.timestamp)),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.align(Alignment.End)
+                                )
+                            }
+                        }
                     }
-                ) {
-                    Text(
-                        text = message.text,
-                        modifier = Modifier.padding(12.dp)
-                    )
                 }
             }
-            Spacer(modifier = Modifier.height(8.dp))
         }
 
 
