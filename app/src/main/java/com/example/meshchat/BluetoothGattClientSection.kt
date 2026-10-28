@@ -1,732 +1,126 @@
 package com.example.meshchat
 
-import android.Manifest
-import android.bluetooth.BluetoothDevice
-import android.bluetooth.BluetoothGatt
-import android.bluetooth.BluetoothGattCallback
-import android.bluetooth.BluetoothManager
-import android.bluetooth.BluetoothProfile
-import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanFilter
-import android.bluetooth.le.ScanResult
-import android.bluetooth.le.ScanSettings
-import android.content.Context
-import android.content.pm.PackageManager
-import android.os.Build
-import android.os.ParcelUuid
-import androidx.annotation.RequiresPermission
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.Text
-import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import android.bluetooth.BluetoothGattCharacteristic
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.ui.Alignment
-import android.bluetooth.BluetoothGattDescriptor
-import android.bluetooth.BluetoothStatusCodes
-import android.net.wifi.aware.Characteristics
-import androidx.compose.ui.input.pointer.stylusHoverIcon
-import java.nio.file.WatchEvent
-import java.util.UUID
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.rememberCoroutineScope
-import kotlinx.coroutines.launch
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import com.example.meshchat.ui.screens.ChatScreen
 
+private enum class AppScreen {
+    HOME,
+    DISCOVERY,
+    CHAT
+}
 
 @Composable
 fun BluetoothGattClientSection() {
-
     val context = LocalContext.current
+    val bleManager = remember { MeshBleManager(context.applicationContext) }
 
-    val bluetoothManager = remember {
-        context.getSystemService(
-            Context.BLUETOOTH_SERVICE
-        ) as BluetoothManager
-    }
-
-    val bluetoothAdapter = bluetoothManager.adapter
-
-    val cccUuid = UUID.fromString(
-        "00002902-0000-1000-8000-00805f9b34fb"
-    )
-
-    var clientStatus by remember {
-        mutableStateOf("Ready to find a MeshChat server")
-    }
-
-    var messageText by remember{
-        mutableStateOf("")
-    }
-
-    var messages by remember {
-        mutableStateOf<List<ChatMessage>>(emptyList())
-    }
-
-    val listState = rememberLazyListState()
-
-    LaunchedEffect(messages.size) {
-        if(messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.lastIndex)
+    // Recompose when MeshBleManager notifies state change
+    var stateTick by remember { mutableIntStateOf(0) }
+    DisposableEffect(bleManager) {
+        bleManager.onStateChanged = {
+            stateTick++
+        }
+        onDispose {
+            bleManager.onStateChanged = null
         }
     }
 
-    var pendingMessage by remember {
-        mutableStateOf<String?>(null)
-    }
-
-    var connectedDevice by remember {
-        mutableStateOf<BluetoothDevice?>(null)
-    }
-
-    // FIX: This must be BluetoothGatt, not BluetoothDevice.
-    var bluetoothGatt by remember {
-        mutableStateOf<BluetoothGatt?>(null)
-    }
-
-    var discoveredDevices by remember {
-        mutableStateOf<List<BluetoothDevice>>(emptyList())
-    }
-
-    var isScanning by remember {
-        mutableStateOf(false)
-    }
-
-    val scanCallback = remember {
-        object : ScanCallback() {
-
-            override fun onScanResult(
-                callbackType: Int,
-                result: ScanResult
-            ) {
-                val device = result.device
-
-                if (discoveredDevices.none {
-                        it.address == device.address
-                    }
-                ) {
-                    discoveredDevices =
-                        discoveredDevices + device
-                }
-            }
-
-            override fun onScanFailed(errorCode: Int) {
-                isScanning = false
-                clientStatus = "Scan failed: $errorCode"
-            }
-        }
-    }
-
-    fun handleIncomingMessage(value: ByteArray) {
-        val receivedText = value.toString(Charsets.UTF_8)
-
-        messages = messages + ChatMessage(
-            text = receivedText,
-            isSent = false
-        )
-
-        clientStatus = "Message received!"
-
-        android.util.Log.d(
-            "MeshChatBLE",
-            "Received notification: $receivedText"
-        )
-    }
-
-    val gattCallback = remember {
-        object : BluetoothGattCallback() {
-
-            @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-            override fun onConnectionStateChange(
-                gatt: BluetoothGatt,
-                status: Int,
-                newState: Int
-            ) {
-                when {
-                    status != BluetoothGatt.GATT_SUCCESS -> {
-                        clientStatus = "Connection failed: $status"
-                        gatt.close()
-                    }
-
-                    newState == BluetoothProfile.STATE_CONNECTED -> {
-                        clientStatus =
-                            "Connected! Discovering services..."
-
-                        val started = gatt.discoverServices()
-
-                        if (!started) {
-                            clientStatus =
-                                "Unable to start service discovery"
-                        }
-                    }
-
-                    newState == BluetoothProfile.STATE_DISCONNECTED -> {
-                        clientStatus = "Disconnected"
-                        connectedDevice = null
-                        gatt.close()
-                    }
-                }
-            }
-
-            override fun onServicesDiscovered(
-                gatt: BluetoothGatt,
-                status: Int
-            ) {
-                if (status != BluetoothGatt.GATT_SUCCESS) {
-                    clientStatus = "Service discovery failed: $status"
-                    return
-                }
-
-                if (
-                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                    ContextCompat.checkSelfPermission(
-                        context,
-                        Manifest.permission.BLUETOOTH_CONNECT
-                    ) != PackageManager.PERMISSION_GRANTED
-                ) {
-                    clientStatus = "Bluetooth Connect permission is missing"
-                    return
-                }
-
-                try {
-                    val service = gatt.getService(MESHCHAT_SERVICE_UUID)
-
-                    if (service == null) {
-                        clientStatus = "MeshChat service not found"
-                        return
-                    }
-
-                    val txCharacteristic =
-                        service.getCharacteristic(MESHCHAT_TX_UUID)
-
-                    if (txCharacteristic == null) {
-                        clientStatus = "TX characteristic not found"
-                        return
-                    }
-
-                    val notificationEnabled = gatt.setCharacteristicNotification(
-                        txCharacteristic,
-                        true
-                    )
-
-                    if (!notificationEnabled) {
-                        clientStatus = "Failed to enable local notifications"
-                        return
-                    }
-
-                    val cccd = txCharacteristic.getDescriptor(cccUuid)
-
-                    if (cccd == null) {
-                        clientStatus = "CCCD descriptor not found"
-                        return
-                    }
-
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        val result = gatt.writeDescriptor(
-                            cccd,
-                            BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                        )
-
-                        clientStatus = if (result == BluetoothStatusCodes.SUCCESS) {
-                            "Subscribing to notifications..."
-                        } else {
-                            "CCCD write failed: $result"
-                        }
-                    } else {
-                        @Suppress("DEPRECATION")
-                        cccd.value =
-                            BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-
-                        @Suppress("DEPRECATION")
-                        val started = gatt.writeDescriptor(cccd)
-
-                        clientStatus = if (started) {
-                            "Subscribing to notifications..."
-                        } else {
-                            "Failed to start CCCD write"
-                        }
-                    }
-                } catch (e: SecurityException) {
-                    clientStatus = "Bluetooth permission missing"
-                    android.util.Log.e(
-                        "MeshChatBLE",
-                        "Permission denied during notification setup",
-                        e
-                    )
-                }
-            }
-
-
-            @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-            override fun onDescriptorWrite(
-                gatt: BluetoothGatt,
-                descriptor: BluetoothGattDescriptor,
-                status: Int
-            ) {
-                if (descriptor.uuid == cccUuid) {
-                    if (status == BluetoothGatt.GATT_SUCCESS) {
-                        clientStatus = "Connected! Notifications enabled"
-
-                        android.util.Log.d(
-                            "MeshChatBLE",
-                            "CCCD subscription successful"
-                        )
-                    } else {
-                        clientStatus = "Notification subscription failed: $status"
-
-                        android.util.Log.e(
-                            "MeshChatBLE",
-                            "CCCD write failed: $status"
-                        )
-                    }
-                }
-            }
-
-
-            @Suppress("DEPRECATION")
-            override fun onCharacteristicChanged(
-                gatt: BluetoothGatt,
-                characteristic: BluetoothGattCharacteristic
-            ) {
-                if (characteristic.uuid == MESHCHAT_TX_UUID) {
-                    val value = characteristic.value ?: return
-                    handleIncomingMessage(value)
-                }
-            }
-
-            override fun onCharacteristicChanged(
-                gatt: BluetoothGatt,
-                characteristic: BluetoothGattCharacteristic,
-                value: ByteArray
-            ) {
-                if (characteristic.uuid == MESHCHAT_TX_UUID) {
-                    handleIncomingMessage(value)
-                }
-            }
-
-            override fun onCharacteristicWrite(
-                gatt: BluetoothGatt,
-                characteristic: BluetoothGattCharacteristic,
-                status: Int
-            ) {
-                if (characteristic.uuid == MESHCHAT_RX_UUID) {
-                    if (status == BluetoothGatt.GATT_SUCCESS) {
-                        val sentMessage = pendingMessage
-
-                        if(sentMessage != null) {
-                            messages = messages + ChatMessage(
-                                text = sentMessage,
-                                isSent = true
-                            )
-                        }
-
-                        pendingMessage = null
-
-                        clientStatus = "Message write successful!"
-                    } else {
-                        pendingMessage = null
-                        clientStatus = "Message write failed: $status"
-                    }
-
-                    android.util.Log.d(
-                        "MeshChatBLE",
-                        "Write callback: status=$status"
-                    )
-                }
-            }
-
-
-
-
-
-
-
-        }
-    }
-
-
-    fun sendMessage() {
-
-        val gatt = bluetoothGatt
-
-        if(gatt == null) {
-            clientStatus = "Connect to a MeshChat server first"
-            return
-        }
-
-        val service = gatt.getService(MESHCHAT_SERVICE_UUID)
-
-        if(service == null) {
-            clientStatus = "MeshChat service not found"
-            return
-        }
-
-        val rxCharacteristic =
-            service.getCharacteristic(MESHCHAT_RX_UUID)
-
-        if(rxCharacteristic == null) {
-            clientStatus = "RX characteristic not found"
-            return
-        }
-
-        val message = messageText.trim()
-
-        if(message.isEmpty()) {
-            clientStatus = "Type a message first"
-            return
-        }
-
-
-
-        try {
-            val messageBytes = message.toByteArray(Charsets.UTF_8)
-
-            val success = if (android.os.Build.VERSION.SDK_INT >= 33) {
-                gatt.writeCharacteristic(
-                    rxCharacteristic,
-                    messageBytes,
-                    BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                ) == android.bluetooth.BluetoothStatusCodes.SUCCESS
-            } else {
-                @Suppress("DEPRECATION")
-                rxCharacteristic.writeType =
-                    BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-
-                @Suppress("DEPRECATION")
-                rxCharacteristic.value = messageBytes
-
-                @Suppress("DEPRECATION")
-                gatt.writeCharacteristic(rxCharacteristic)
-
-            }
-
-            clientStatus = if(success) {
-                pendingMessage = message
-                "Sending message..."
-            } else {
-                pendingMessage = null
-                "Unable to start message write"
-            }
-        } catch (e: SecurityException) {
-            clientStatus = "Bluetooth permission missing"
-        }
-
-
-
-    }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(16.dp)
-    ) {
-
-        Text(
-            text = "MeshChat",
-            style = MaterialTheme.typography.headlineMedium
-        )
-
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        Text(
-
-            text = when {
-
-                clientStatus.contains("Notifications enabled") ->
-                    "● Connected"
-
-                clientStatus.contains("Connected!") ->
-                    "● Connecting..."
-
-                clientStatus.contains("Disconnected") ->
-                    "○ Disconnected"
-                else ->
-                    "○ Not connected"
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        Text(
-            text = "Messages",
-            style = MaterialTheme.typography.titleMedium
-        )
-
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        if (messages.isEmpty()) {
-            Text(
-                text = "No messages yet. Say hello!",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 16.dp)
-            )
+    // Permission Launcher
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        if (results.values.all { it }) {
+            bleManager.logEvent("Permissions granted by user")
         } else {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 400.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                itemsIndexed(messages) { _, message ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = if (message.isSent) {
-                            Arrangement.End
-                        } else {
-                            Arrangement.Start
-                        }
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(
-                                topStart = 16.dp,
-                                topEnd = 16.dp,
-                                bottomStart = if (message.isSent) 16.dp else 4.dp,
-                                bottomEnd = if (message.isSent) 4.dp else 16.dp
-                            ),
-                            color = if (message.isSent) {
-                                MaterialTheme.colorScheme.primaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.surfaceVariant
-                            },
-                            modifier = Modifier.fillMaxWidth(0.82f)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(
-                                    horizontal = 12.dp,
-                                    vertical = 8.dp
-                                )
-                            ) {
-                                Text(
-                                    text = message.text,
-                                    style = MaterialTheme.typography.bodyLarge
-                                )
-
-                                Spacer(modifier = Modifier.height(4.dp))
-
-                                Text(
-                                    text = java.text.SimpleDateFormat(
-                                        "hh:mm a",
-                                        java.util.Locale.getDefault()
-                                    ).format(java.util.Date(message.timestamp)),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.align(Alignment.End)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+            bleManager.logEvent("Some permissions were denied", isError = true)
         }
+    }
 
-
-        OutlinedTextField(
-            value = messageText,
-            onValueChange = { messageText = it },
-            label = { Text("Message") },
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Button(
-            onClick = {sendMessage()},
-            enabled = bluetoothGatt != null
-        )
-
-        {
-            Text("Send")
+    // Auto-request permissions and start GATT Server + Advertiser on launch
+    LaunchedEffect(bleManager.checkPermissions(), bleManager.bluetoothAdapter?.isEnabled) {
+        if (!bleManager.checkPermissions()) {
+            permissionLauncher.launch(bleManager.requiredPermissions)
+        } else if (bleManager.bluetoothAdapter?.isEnabled == true) {
+            bleManager.startGattServer()
+            bleManager.startAdvertising()
         }
+    }
 
+    var currentScreen by remember { mutableStateOf(AppScreen.HOME) }
 
+    // Recompose dependency on stateTick
+    @Suppress("UNUSED_VARIABLE")
+    val currentTick = stateTick
 
-
-        Button(
-            onClick = {
-                val hasScanPermission =
-                    Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-                            ContextCompat.checkSelfPermission(
-                                context,
-                                Manifest.permission.BLUETOOTH_SCAN
-                            ) == PackageManager.PERMISSION_GRANTED
-
-                val hasConnectPermission =
-                    Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-                            ContextCompat.checkSelfPermission(
-                                context,
-                                Manifest.permission.BLUETOOTH_CONNECT
-                            ) == PackageManager.PERMISSION_GRANTED
-
-                when {
-                    !hasScanPermission || !hasConnectPermission -> {
-                        clientStatus =
-                            "Grant Bluetooth permissions first"
-                    }
-
-                    bluetoothAdapter == null -> {
-                        clientStatus =
-                            "Bluetooth is not supported"
-                    }
-
-                    !bluetoothAdapter.isEnabled -> {
-                        clientStatus =
-                            "Turn Bluetooth on first"
-                    }
-
-                    else -> {
-                        clientStatus = "Bluetooth is ready"
-                    }
-                }
-            }
-        ) {
-            Text("Check Bluetooth")
-        }
-
-        Button(
-            onClick = {
-                try {
-                    val scanner =
-                        bluetoothAdapter?.bluetoothLeScanner
-
-                    if (scanner == null) {
-                        clientStatus =
-                            "Bluetooth scanner unavailable"
+    when (currentScreen) {
+        AppScreen.HOME -> {
+            HomeScreen(
+                bluetoothStatus = bleManager.clientStatus,
+                isAdvertising = bleManager.isAdvertising,
+                isConnected = bleManager.isConnected,
+                connectedPeerName = bleManager.activePeerName,
+                lastMessage = bleManager.messages.lastOrNull()?.text,
+                onNewChatClick = {
+                    if (!bleManager.checkPermissions()) {
+                        permissionLauncher.launch(bleManager.requiredPermissions)
                     } else {
-                        discoveredDevices = emptyList()
-
-                        val filter = ScanFilter.Builder()
-                            .setServiceUuid(
-                                ParcelUuid(MESHCHAT_SERVICE_UUID)
-                            )
-                            .build()
-
-                        val settings = ScanSettings.Builder()
-                            .setScanMode(
-                                ScanSettings.SCAN_MODE_LOW_LATENCY
-                            )
-                            .build()
-
-                        scanner.startScan(
-                            listOf(filter),
-                            settings,
-                            scanCallback
-                        )
-
-                        isScanning = true
-                        clientStatus =
-                            "Searching for MeshChat devices..."
+                        currentScreen = AppScreen.DISCOVERY
                     }
-                } catch (e: SecurityException) {
-                    clientStatus =
-                        "Bluetooth permission missing"
-                }
-            },
-            enabled = !isScanning
-        ) {
-            Text("Find MeshChat Devices")
+                },
+                onOpenChatClick = { currentScreen = AppScreen.CHAT },
+                // Diagnostics
+                bluetoothAdapterStatus = if (bleManager.bluetoothAdapter?.isEnabled == true) "Enabled" else "Disabled",
+                hasPermissions = bleManager.checkPermissions(),
+                isGattServerRunning = bleManager.isGattServerRunning,
+                isScanning = bleManager.isScanning,
+                isNotificationsSubscribed = bleManager.clientStatus.contains("Notifications enabled") || bleManager.serverNotificationsEnabled,
+                lastError = bleManager.lastLogMessage
+            )
         }
 
-        Button(
-            onClick = {
-                try {
-                    bluetoothAdapter?.bluetoothLeScanner
-                        ?.stopScan(scanCallback)
-
-                    isScanning = false
-                    clientStatus = "Scanning stopped"
-                } catch (e: SecurityException) {
-                    clientStatus =
-                        "Bluetooth permission missing"
+        AppScreen.DISCOVERY -> {
+            // Auto start scanning when Discovery screen is active
+            DisposableEffect(Unit) {
+                bleManager.startScanning()
+                onDispose {
+                    bleManager.stopScanning()
                 }
-            },
-            enabled = isScanning
-        ) {
-            Text("Stop Scanning")
-        }
-
-        Text("Discovered devices: ${discoveredDevices.size}")
-
-        discoveredDevices.forEach { device ->
-
-            Text("Device: ${device.address}")
-
-            Button(
-                onClick = {
-                    try {
-                        val hasConnectPermission =
-                            Build.VERSION.SDK_INT <
-                                    Build.VERSION_CODES.S ||
-                                    ContextCompat.checkSelfPermission(
-                                        context,
-                                        Manifest.permission.BLUETOOTH_CONNECT
-                                    ) == PackageManager.PERMISSION_GRANTED
-
-                        if (!hasConnectPermission) {
-                            clientStatus =
-                                "Grant Bluetooth Connect permission"
-                            return@Button
-                        }
-
-                        // Stop scanning before connecting.
-                        if (isScanning) {
-                            bluetoothAdapter?.bluetoothLeScanner
-                                ?.stopScan(scanCallback)
-
-                            isScanning = false
-                        }
-
-                        // Close any previous connection.
-                        bluetoothGatt?.close()
-                        bluetoothGatt = null
-
-                        connectedDevice = device
-                        clientStatus =
-                            "Connecting to ${device.address}..."
-
-                        bluetoothGatt = device.connectGatt(
-                            context,
-                            false,
-                            gattCallback,
-                            BluetoothDevice.TRANSPORT_LE
-                        )
-
-                        if (bluetoothGatt == null) {
-                            clientStatus =
-                                "Unable to start GATT connection"
-                        }
-
-                    } catch (e: SecurityException) {
-                        clientStatus =
-                            "Bluetooth permission missing"
-                    }
-                }
-            ) {
-                Text("Connect")
             }
+
+            DeviceDiscoveryScreen(
+                isScanning = bleManager.isScanning,
+                statusText = bleManager.clientStatus,
+                discoveredDevices = bleManager.discoveredDevices,
+                connectingDeviceAddress = bleManager.connectedClientDevice?.address,
+                onStartScanClick = { bleManager.startScanning() },
+                onStopScanClick = { bleManager.stopScanning() },
+                onConnectDeviceClick = { device ->
+                    bleManager.connectToDevice(device)
+                    currentScreen = AppScreen.CHAT
+                },
+                onBackClick = { currentScreen = AppScreen.HOME }
+            )
+        }
+
+        AppScreen.CHAT -> {
+            ChatScreen(
+                peerName = bleManager.activePeerName,
+                isConnected = bleManager.isConnected,
+                statusText = bleManager.clientStatus,
+                messages = bleManager.messages,
+                onSendClick = { text -> bleManager.enqueueMessage(text) },
+                onBackClick = { currentScreen = AppScreen.HOME }
+            )
         }
     }
 }
