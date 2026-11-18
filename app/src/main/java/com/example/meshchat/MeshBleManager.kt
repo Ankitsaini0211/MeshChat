@@ -207,13 +207,12 @@ class MeshBleManager(private val context: Context) {
 
             if (responseNeeded) {
                 try {
-                    // FIX #6: write response payload should be empty, not the received value
                     val sent = gattServer?.sendResponse(
                         device,
                         requestId,
                         BluetoothGatt.GATT_SUCCESS,
                         offset,
-                        null
+                        value
                     ) ?: false
                     logEvent("sendResponse result: $sent for reqId=$requestId")
                 } catch (e: SecurityException) {
@@ -246,7 +245,7 @@ class MeshBleManager(private val context: Context) {
                             requestId,
                             BluetoothGatt.GATT_SUCCESS,
                             offset,
-                            null
+                            value
                         ) ?: false
                         logEvent("CCCD sendResponse result: $sent for reqId=$requestId")
                     } catch (e: SecurityException) {
@@ -681,7 +680,7 @@ class MeshBleManager(private val context: Context) {
     }
 
     private fun processNextWriteInQueue() {
-        if (isWriteInFlight || isAwaitingNoResponseCallback || outgoingQueue.isEmpty()) return
+        if (isWriteInFlight || outgoingQueue.isEmpty()) return
 
         val textToSend = outgoingQueue.peekFirst() ?: return
         val bytes = textToSend.toByteArray(Charsets.UTF_8)
@@ -692,44 +691,24 @@ class MeshBleManager(private val context: Context) {
             val rxChar = gatt.getService(MESHCHAT_SERVICE_UUID)
                 ?.getCharacteristic(MESHCHAT_RX_UUID)
             if (rxChar != null) {
-                val defaultCode = writeChar(gatt, rxChar, bytes,
-                    BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+                val code = writeChar(gatt, rxChar, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
 
-                if (defaultCode == BluetoothStatusCodes.SUCCESS) {
+                if (code == BluetoothStatusCodes.SUCCESS) {
                     isWriteInFlight = true
                     clientStatus = "Sending message…"
-                    logEvent("DEFAULT write initiated for: '$textToSend'")
+                    logEvent("GATT write initiated for: '$textToSend' (queue size=${outgoingQueue.size})")
                     notifyStateChanged()
                     mainHandler.removeCallbacks(writeWatchdog)
-                    mainHandler.postDelayed(writeWatchdog, 5_000L)   // FIX #5
+                    mainHandler.postDelayed(writeWatchdog, 5_000L)
                     return
-                }
-
-                logEvent("DEFAULT write failed (code=$defaultCode), trying NO_RESPONSE", isError = true)
-                val noRespCode = writeChar(gatt, rxChar, bytes,
-                    BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE)
-
-                if (noRespCode == BluetoothStatusCodes.SUCCESS) {
-                    // FIX #2: complete immediately, then guard against a late callback
-                    val sentText = outgoingQueue.removeFirst()
-                    messages = messages + ChatMessage(text = sentText, isSent = true)
-                    clientStatus = "Message sent!"
-                    logEvent("NO_RESPONSE write succeeded for: '$sentText'")
-                    isAwaitingNoResponseCallback = true
+                } else {
+                    logEvent("gatt.writeCharacteristic failed to initiate (code=$code) for '$textToSend'. Retrying in 200ms…", isError = true)
                     notifyStateChanged()
                     mainHandler.postDelayed({
-                        isAwaitingNoResponseCallback = false
                         processNextWriteInQueue()
-                    }, 100L)
+                    }, 200L)
                     return
                 }
-
-                logEvent("NO_RESPONSE write also failed (code=$noRespCode)", isError = true)
-                outgoingQueue.removeFirst()
-                clientStatus = "Message write failed (code $noRespCode)"
-                notifyStateChanged()
-                processNextWriteInQueue()
-                return
             }
         }
 
@@ -792,12 +771,11 @@ class MeshBleManager(private val context: Context) {
                 @Suppress("DEPRECATION")
                 char.value = bytes
                 @Suppress("DEPRECATION")
-                if (gatt.writeCharacteristic(char)) BluetoothStatusCodes.SUCCESS
-                else BluetoothStatusCodes.ERROR_UNKNOWN
+                if (gatt.writeCharacteristic(char)) 0 else -1
             }
         } catch (e: SecurityException) {
             logEvent("Permission missing during writeCharacteristic", isError = true)
-            BluetoothStatusCodes.ERROR_MISSING_BLUETOOTH_CONNECT_PERMISSION
+            -1
         }
     }
 

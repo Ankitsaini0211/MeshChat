@@ -254,7 +254,7 @@ fun BluetoothGattServerSection() {
                                     requestId,
                                     BluetoothGatt.GATT_SUCCESS,
                                     offset,
-                                    null
+                                    value
                                 )
                             } catch (e: SecurityException) {
                                 Log.e(
@@ -286,7 +286,7 @@ fun BluetoothGattServerSection() {
                                     requestId,
                                     BluetoothGatt.GATT_SUCCESS,
                                     offset,
-                                    null
+                                    value
                                 )
                             } catch (e: SecurityException) {
                                 Log.e(
@@ -350,7 +350,7 @@ fun BluetoothGattServerSection() {
                                     BluetoothGatt.GATT_FAILURE
                                 },
                                 offset,
-                                null
+                                value
                             )
                         } catch (e: SecurityException) {
                             Log.e(
